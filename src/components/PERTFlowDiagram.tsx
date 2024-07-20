@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import ReactFlow, {
   Node,
   Edge,
@@ -6,96 +6,159 @@ import ReactFlow, {
   Background,
   Controls,
   MiniMap,
+  useNodesState,
+  useEdgesState,
+  Position,
 } from "react-flow-renderer";
+import ELK from "elkjs/lib/elk.bundled.js";
 import { Activity } from "./PERTTable";
 
 interface PERTFlowProps {
   activities: Activity[];
 }
 
+const elk = new ELK();
+
 const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
-  useEffect(() => {
-    const createNodesAndEdges = () => {
-      const newNodes: Node[] = [];
-      const newEdges: Edge[] = [];
+  const createNodesAndEdges = useCallback(() => {
+    const newNodes: Node[] = [];
+    const newEdges: Edge[] = [];
 
-      // Create start node
+    // Create start node
+    newNodes.push({
+      id: "start",
+      sourcePosition: "right" as Position,
+      type: "input",
+      data: { label: "Start" },
+      position: { x: 0, y: 0 },
+    });
+
+    // Create nodes for each activity
+    activities.forEach((activity) => {
       newNodes.push({
-        id: "start",
-        data: { label: "Start" },
-        position: { x: 0, y: 0 },
-        type: "input",
+        id: activity.id,
+        sourcePosition: "right" as Position,
+        targetPosition: "left" as Position,
+        data: {
+          label: `${activity.activity}\nMean: ${activity.mean.toFixed(
+            2
+          )}\nVariance: ${activity.variance.toFixed(2)}`,
+        },
+        position: { x: 0, y: 0 }, // Initial position, will be updated by ELK
       });
+    });
 
-      // Create nodes for each activity
-      activities.forEach((activity, index) => {
-        newNodes.push({
-          id: activity.id,
-          data: {
-            label: `${activity.activity}\nMean: ${activity.mean.toFixed(
-              2
-            )}\nVariance: ${activity.variance.toFixed(2)}`,
-          },
-          position: { x: (index + 1) * 200, y: (index + 1) * 100 },
+    // Create end node
+    newNodes.push({
+      id: "end",
+      targetPosition: "left" as Position,
+      type: "output",
+      data: { label: "End" },
+      position: { x: 0, y: 0 },
+    });
+
+    // Create edges
+    activities.forEach((activity) => {
+      if (activity.predecessor) {
+        const predecessors = activity.predecessor
+          .split(",")
+          .map((p) => p.trim());
+        predecessors.forEach((predecessor) => {
+          const sourceActivity = activities.find(
+            (a) => a.activity === predecessor
+          );
+          if (sourceActivity) {
+            newEdges.push({
+              id: `${sourceActivity.id}-${activity.id}`,
+              source: sourceActivity.id,
+              target: activity.id,
+            });
+          }
         });
-      });
+      } else {
+        // If no predecessor, connect to start node
+        newEdges.push({
+          id: `start-${activity.id}`,
+          source: "start",
+          target: activity.id,
+        });
+      }
 
-      // Create end node
-      newNodes.push({
-        id: "end",
-        data: { label: "End" },
-        position: { x: (activities.length + 1) * 200, y: 0 },
-        type: "output",
-      });
+      // If no successor, connect to end node
+      if (
+        !activities.some(
+          (a) => a.predecessor && a.predecessor.includes(activity.activity)
+        )
+      ) {
+        newEdges.push({
+          id: `${activity.id}-end`,
+          source: activity.id,
+          target: "end",
+        });
+      }
+    });
 
-      // Create edges
-      activities.forEach((activity) => {
-        if (!activity.predecessor) {
-          newEdges.push({
-            id: `start-${activity.id}`,
-            source: "start",
-            target: activity.id,
-            type: "smoothstep",
-          });
-        } else {
-          newEdges.push({
-            id: `${activity.predecessor}-${activity.id}`,
-            source:
-              activities.find((a) => a.activity === activity.predecessor)?.id ||
-              "",
-            target: activity.id,
-            type: "smoothstep",
-          });
-        }
-      });
+    return { nodes: newNodes, edges: newEdges };
+  }, [activities]);
 
-      // Connect activities with no successors to the end node
-      activities.forEach((activity) => {
-        if (!activities.some((a) => a.predecessor === activity.activity)) {
-          newEdges.push({
-            id: `${activity.id}-end`,
-            source: activity.id,
-            target: "end",
-            type: "smoothstep",
-          });
-        }
-      });
-
-      setNodes(newNodes);
-      setEdges(newEdges);
+  const layoutElements = useCallback(async (nodes: Node[], edges: Edge[]) => {
+    const elkGraph = {
+      id: "root",
+      layoutOptions: {
+        "elk.algorithm": "layered",
+        "elk.direction": "RIGHT",
+        "elk.spacing.nodeNode": "50",
+        "elk.layered.spacing.nodeNodeBetweenLayers": "100",
+      },
+      children: nodes.map((node) => ({
+        id: node.id,
+        width: 180,
+        height: 70,
+      })),
+      edges: edges.map((edge) => ({
+        id: edge.id,
+        sources: [edge.source],
+        targets: [edge.target],
+      })),
     };
 
-    createNodesAndEdges();
-  }, [activities]);
+    const newGraph = await elk.layout(elkGraph);
+
+    return {
+      nodes: nodes.map((node) => {
+        const elkNode = newGraph.children?.find((n) => n.id === node.id);
+        return {
+          ...node,
+          position: { x: elkNode?.x || 0, y: elkNode?.y || 0 },
+        };
+      }),
+      edges,
+    };
+  }, []);
+
+  useEffect(() => {
+    const updateGraph = async () => {
+      const { nodes: initialNodes, edges: initialEdges } =
+        createNodesAndEdges();
+      const { nodes: layoutedNodes, edges: layoutedEdges } =
+        await layoutElements(initialNodes, initialEdges);
+      setNodes(layoutedNodes);
+      setEdges(layoutedEdges);
+    };
+
+    updateGraph();
+  }, [activities, createNodesAndEdges, layoutElements, setNodes, setEdges]);
 
   return (
     <div style={{ width: "100%", height: "500px" }}>
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         connectionLineType={ConnectionLineType.SmoothStep}
         fitView
       >

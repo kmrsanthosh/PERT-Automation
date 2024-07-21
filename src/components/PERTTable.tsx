@@ -10,22 +10,22 @@ import {
 } from "@/components/ui/table";
 import { Input } from "@/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CSVLink } from "react-csv";
 import { useMediaQuery } from "react-responsive";
 import PERTFlow from "./PERTFlowDiagram";
+import { Trash2 } from "lucide-react";
 
 export interface Activity {
   id: string;
   activity: string;
-  predecessor: string;
+  predecessors: string[];
   optimisticTime: number;
   mostLikelyTime: number;
   pessimisticTime: number;
@@ -47,7 +47,7 @@ const PERTTable: React.FC = () => {
     (id: string): Activity => ({
       id,
       activity: "",
-      predecessor: "",
+      predecessors: [],
       optimisticTime: 0,
       mostLikelyTime: 0,
       pessimisticTime: 0,
@@ -98,7 +98,7 @@ const PERTTable: React.FC = () => {
   };
 
   const updateActivity = useCallback(
-    (id: string, field: keyof Activity, value: string | number) => {
+    (id: string, field: keyof Activity, value: string | number | string[]) => {
       setActivities((prevActivities) =>
         prevActivities.map((activity) => {
           if (activity.id === id) {
@@ -150,6 +150,12 @@ const PERTTable: React.FC = () => {
     }
   };
 
+  const deleteRow = (id: string) => {
+    setActivities((prevActivities) =>
+      prevActivities.filter((activity) => activity.id !== id)
+    );
+  };
+
   const sortedActivities = React.useMemo(() => {
     let sortableActivities = [...activities];
     if (sortConfig !== null) {
@@ -180,8 +186,6 @@ const PERTTable: React.FC = () => {
     setSortConfig({ key, direction });
   };
 
-  console.log(activities);
-
   return (
     <div className="container mx-auto p-4">
       <h1 className="text-2xl font-bold mb-4">PERT Analysis</h1>
@@ -208,12 +212,13 @@ const PERTTable: React.FC = () => {
             <TableRow>
               {[
                 "Activities",
-                "Immediate Predecessor",
+                "Immediate Predecessors",
                 "Optimistic Time",
                 "Most Likely Time",
                 "Pessimistic Time",
                 "Mean",
                 "Variance",
+                "Actions",
               ].map((header, index) => (
                 <TableHead
                   key={index}
@@ -233,7 +238,7 @@ const PERTTable: React.FC = () => {
           </TableHeader>
           <TableBody>
             {sortedActivities.map((activity) => (
-              <TableRow key={activity.id}>
+              <TableRow key={activity.id} className="group">
                 <TableCell>
                   <Input
                     value={activity.activity}
@@ -244,25 +249,49 @@ const PERTTable: React.FC = () => {
                   />
                 </TableCell>
                 <TableCell>
-                  <Select
-                    onValueChange={(value) =>
-                      updateActivity(activity.id, "predecessor", value)
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select predecessor" />
-                    </SelectTrigger>
-                    <SelectContent>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" className="w-full">
+                        {activity.predecessors.length > 0
+                          ? activity.predecessors.join(", ")
+                          : "None"}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-56">
+                      <DropdownMenuCheckboxItem
+                        checked={activity.predecessors.length === 0}
+                        onCheckedChange={() =>
+                          updateActivity(activity.id, "predecessors", [])
+                        }
+                      >
+                        None
+                      </DropdownMenuCheckboxItem>
                       {activities
                         .filter((a) => a.id !== activity.id && a.activity)
                         .map((a) => (
-                          <SelectItem key={a.id} value={a.activity}>
+                          <DropdownMenuCheckboxItem
+                            key={a.id}
+                            checked={activity.predecessors.includes(a.activity)}
+                            onCheckedChange={(checked) => {
+                              const newPredecessors = checked
+                                ? [...activity.predecessors, a.activity]
+                                : activity.predecessors.filter(
+                                    (p) => p !== a.activity
+                                  );
+                              updateActivity(
+                                activity.id,
+                                "predecessors",
+                                newPredecessors
+                              );
+                            }}
+                          >
                             {a.activity}
-                          </SelectItem>
+                          </DropdownMenuCheckboxItem>
                         ))}
-                    </SelectContent>
-                  </Select>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 </TableCell>
+
                 <TableCell>
                   <Input
                     type="number"
@@ -307,6 +336,16 @@ const PERTTable: React.FC = () => {
                 </TableCell>
                 <TableCell>{activity.mean.toFixed(2)}</TableCell>
                 <TableCell>{activity.variance.toFixed(2)}</TableCell>
+                <TableCell>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => deleteRow(activity.id)}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>

@@ -62,11 +62,8 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
 
     // Create edges
     activities.forEach((activity) => {
-      if (activity.predecessor) {
-        const predecessors = activity.predecessor
-          .split(",")
-          .map((p) => p.trim());
-        predecessors.forEach((predecessor) => {
+      if (activity.predecessors.length > 0) {
+        activity.predecessors.forEach((predecessor) => {
           const sourceActivity = activities.find(
             (a) => a.activity === predecessor
           );
@@ -79,20 +76,21 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
           }
         });
       } else {
-        // If no predecessor, connect to start node
+        // If no predecessors, connect to start node
         newEdges.push({
           id: `start-${activity.id}`,
           source: "start",
           target: activity.id,
         });
       }
+    });
 
-      // If no successor, connect to end node
-      if (
-        !activities.some(
-          (a) => a.predecessor && a.predecessor.includes(activity.activity)
-        )
-      ) {
+    // Connect activities with no successors to the end node
+    activities.forEach((activity) => {
+      const hasSuccessor = activities.some((a) =>
+        a.predecessors.includes(activity.activity)
+      );
+      if (!hasSuccessor) {
         newEdges.push({
           id: `${activity.id}-end`,
           source: activity.id,

@@ -17,13 +17,81 @@ interface PERTFlowProps {
   activities: Activity[];
 }
 
+interface PERTActivity extends Activity {
+  es: number;
+  ef: number;
+  ls: number;
+  lf: number;
+  isCritical: boolean;
+}
+
 const elk = new ELK();
 
 const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
 
+  const calculatePERT = useCallback(
+    (activities: Activity[]): PERTActivity[] => {
+      const pertActivities: PERTActivity[] = activities.map((activity) => ({
+        ...activity,
+        es: 0,
+        ef: 0,
+        ls: 0,
+        lf: 0,
+        isCritical: false,
+      }));
+
+      // Forward pass
+      pertActivities.forEach((activity) => {
+        if (activity.predecessors.length === 0) {
+          activity.es = 0;
+        } else {
+          activity.es = Math.max(
+            ...activity.predecessors.map((pred) => {
+              const predActivity = pertActivities.find(
+                (a) => a.activity === pred
+              );
+              return predActivity ? predActivity.ef : 0;
+            })
+          );
+        }
+        activity.ef = activity.es + activity.mean;
+      });
+
+      // Backward pass
+      const maxEF = Math.max(...pertActivities.map((a) => a.ef));
+      pertActivities.reverse().forEach((activity) => {
+        if (
+          pertActivities.every(
+            (a) => !a.predecessors.includes(activity.activity)
+          )
+        ) {
+          activity.lf = maxEF;
+        } else {
+          activity.lf = Math.min(
+            ...pertActivities
+              .filter((a) => a.predecessors.includes(activity.activity))
+              .map((a) => a.ls)
+          );
+        }
+        activity.ls = activity.lf - activity.mean;
+      });
+
+      // Determine critical path
+      pertActivities.forEach((activity) => {
+        activity.isCritical =
+          Math.abs(activity.es - activity.ls) < 0.001 &&
+          Math.abs(activity.ef - activity.lf) < 0.001;
+      });
+
+      return pertActivities;
+    },
+    []
+  );
+
   const createNodesAndEdges = useCallback(() => {
+    const pertActivities = calculatePERT(activities);
     const newNodes: Node[] = [];
     const newEdges: Edge[] = [];
 
@@ -37,17 +105,16 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
     });
 
     // Create nodes for each activity
-    activities.forEach((activity) => {
+    pertActivities.forEach((activity) => {
       newNodes.push({
         id: activity.id,
         sourcePosition: "right" as Position,
         targetPosition: "left" as Position,
         data: {
-          label: `${activity.activity}\nMean: ${activity.mean.toFixed(
-            2
-          )}\nVariance: ${activity.variance.toFixed(2)}`,
+          label: `ES: ${activity.es.toFixed(2)}\nLS: ${activity.ls.toFixed(2)}`,
         },
-        position: { x: 0, y: 0 }, // Initial position, will be updated by ELK
+        style: activity.isCritical ? { border: "2px solid red" } : {},
+        position: { x: 0, y: 0 },
       });
     });
 
@@ -61,10 +128,10 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
     });
 
     // Create edges
-    activities.forEach((activity) => {
+    pertActivities.forEach((activity) => {
       if (activity.predecessors.length > 0) {
         activity.predecessors.forEach((predecessor) => {
-          const sourceActivity = activities.find(
+          const sourceActivity = pertActivities.find(
             (a) => a.activity === predecessor
           );
           if (sourceActivity) {
@@ -72,6 +139,12 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
               id: `${sourceActivity.id}-${activity.id}`,
               source: sourceActivity.id,
               target: activity.id,
+              label: `${activity.activity} (${activity.mean.toFixed(2)})`,
+              animated: activity.isCritical && sourceActivity.isCritical,
+              style:
+                activity.isCritical && sourceActivity.isCritical
+                  ? { stroke: "red" }
+                  : {},
             });
           }
         });
@@ -81,13 +154,16 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
           id: `start-${activity.id}`,
           source: "start",
           target: activity.id,
+          label: `${activity.activity} (${activity.mean.toFixed(2)})`,
+          animated: activity.isCritical,
+          style: activity.isCritical ? { stroke: "red" } : {},
         });
       }
     });
 
     // Connect activities with no successors to the end node
-    activities.forEach((activity) => {
-      const hasSuccessor = activities.some((a) =>
+    pertActivities.forEach((activity) => {
+      const hasSuccessor = pertActivities.some((a) =>
         a.predecessors.includes(activity.activity)
       );
       if (!hasSuccessor) {
@@ -95,12 +171,14 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
           id: `${activity.id}-end`,
           source: activity.id,
           target: "end",
+          animated: activity.isCritical,
+          style: activity.isCritical ? { stroke: "red" } : {},
         });
       }
     });
 
     return { nodes: newNodes, edges: newEdges };
-  }, [activities]);
+  }, [activities, calculatePERT]);
 
   const layoutElements = useCallback(async (nodes: Node[], edges: Edge[]) => {
     const elkGraph = {
@@ -113,8 +191,8 @@ const PERTFlow: React.FC<PERTFlowProps> = ({ activities }) => {
       },
       children: nodes.map((node) => ({
         id: node.id,
-        width: 180,
-        height: 70,
+        width: 120,
+        height: 60,
       })),
       edges: edges.map((edge) => ({
         id: edge.id,
